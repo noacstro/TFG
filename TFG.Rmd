@@ -1,0 +1,557 @@
+---
+title: "TFG"
+author: "Noa Castro González"
+date: "2024-04-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Conjunto de datos de España
+
+
+## Cargado de datos
+
+```{r}
+library(readr)
+library(dplyr)
+datos_salud <- read_delim("/Users/noa/Desktop/4º/TFG/datos_barometro_salud.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+```
+
+## Eliminar columnas no relevantes.
+
+```{r}
+
+# Eliminar las últimas 54 columnas
+datos_sin_ultimas_50 <- datos_salud[, -c((ncol(datos_salud) - 53):ncol(datos_salud))]
+
+# Eliminar las primeras 5 columnas del resultado anterior
+datos <- datos_sin_ultimas_50[, -c(1:5)]
+
+#Eliminar pregunta 21 (solo aplica a una parte de la muestra):
+datos = datos[,-48]
+
+# Renombrar la columna P0_ccaa a P0
+datos <- datos %>% 
+  rename(P0 = P0_ccaa)
+```
+
+
+
+# Variables categóricas uni-respuesta
+
+
+Separar las categóricas que no vienen subdivididas por respuesta que sólo aplican a parte de la muestra y ya codificadas por 0 y 1. Función creada para las variables posteriores categóricas que hay que recodificar.
+
+
+```{r}
+# Modificar la función crear_dummies para aceptar múltiples columnas
+crear_dummies <- function(datos, columnas) {
+  for (columna in columnas) {
+    # Obtener los posibles valores distintos de NA de la columna
+    valores <- unique(datos[[columna]])
+    valores <- valores[!is.na(valores)]
+    
+    # Crear nuevas columnas para cada valor único de la columna
+    nuevas_columnas <- matrix(NA, nrow = nrow(datos), ncol = length(valores),
+                              dimnames = list(NULL, paste0(columna, "R", valores)))
+    
+    # Asignar 1 a las nuevas columnas cuando corresponda
+    for (i in 1:length(valores)) {
+      nuevas_columnas[, i] <- ifelse(datos[[columna]] == valores[i], 1, 0)
+    }
+    
+    # Obtener índice de la columna original
+    indice_original <- which(colnames(datos) == columna)
+    
+    # Combinar las nuevas columnas con el conjunto de datos original
+    datos <- cbind(datos[, 1:indice_original], nuevas_columnas, datos[, (indice_original + 1):ncol(datos)])
+    
+    # Eliminar la columna original
+    datos <- datos[, !colnames(datos) %in% columna]
+  }
+  
+  return(datos)
+}
+
+```
+
+
+```{r}
+
+# Definir las variables especiales y las variables de respuesta unirespuesta
+variables_especiales <- c("P37", "P58")
+
+resto_variables_unirespuesta <- c("P0","P2","P3","P4","P5","P6","P7","P12","P13","P23","P24","P25","P27","P28","P29","P30","P31","P32","P33","P34","P35","P36","P39","P40","P56","P61","P77","P78","P79","P80","P81","P104")
+
+# Concatenar ambos vectores para obtener variables_a_convertir
+variables_a_convertir <- c(resto_variables_unirespuesta, variables_especiales)
+
+# Búsqueda y reemplazo de valores "9" y "99" con NA en las variables
+for (variable in resto_variables_unirespuesta[-1]) {
+  datos[[variable]][datos[[variable]] %in% c("9", "99")] <- NA
+}
+
+# Aplicar la función para crear dummies a todas las variables definidas.
+datos <- crear_dummies(datos, variables_a_convertir)
+```
+
+
+
+## Imputar los NAs
+
+### Variables especiales
+```{r}
+#Crear una función que recodifique las variables: convierte en 0 los NAs.
+recodificar_variables_dummy <- function(datos, variables) {
+  for (variable in variables) {
+    if (anyNA(datos[[variable]])) {
+      datos[[variable]] <- ifelse(is.na(datos[[variable]]), 0, 1)
+    }
+  }
+  return(datos)
+}
+
+
+# Obtener nuevamente todas las variables que contienen los prefijos del vector variables_especiales original
+variables_especiales <- grep(paste(variables_especiales, collapse = "|"), names(datos), value = TRUE)
+
+
+# Recodificar las variables que contienen los prefijos especificados
+datos <- recodificar_variables_dummy(datos, variables_especiales)
+```
+
+Continuar con la imputación de NAs al final.
+
+
+
+# Variables categóricas multirespuesta:
+
+
+Encontrar las columnas que almacenan únicamente los valores Ns/Nc de las categóricas multirespuesta. Se tiene que eliminar: P10R99,P11R99,P22R9,P38R9,P57R9,P59R9,P60R12.
+
+Crear un vector que las elimine.
+
+```{r}
+# Crear un vector con los nombres de las columnas que almacenan solo "Ns" o "Nc"
+columnas_eliminar <- c("P10R99", "P11R99", "P22R9", "P38R9", "P57R9", "P59R9", "P60R12")
+
+# Eliminar las columnas del conjunto de datos
+datos <- datos[, !colnames(datos) %in% columnas_eliminar]
+```
+
+
+Configurar todas aquellas variables multirrespuesta para recodificar los NAs como 0.
+
+```{r}
+# Obtener las variables que comienzan con los prefijos especificados
+variables_multirrespuesta <- grep("^P10|^P11|^P22|^P38|^P57|^P59|^P60", names(datos), value = TRUE)
+
+# Recodificar las variables dummy en 1 y 0 para las variables seleccionadas
+datos <- recodificar_variables_dummy(datos, variables_multirrespuesta)
+
+```
+
+
+
+# Variables discretas
+
+```{r}
+# Obtener todas las columnas del conjunto de datos
+todas_columnas <- colnames(datos)
+
+# Obtener las columnas que contienen dummies
+columnas_dummies <- grep("^P[0-9]+R[0-9]+$", todas_columnas)
+
+# Obtener las columnas discretas (no contienen dummies)
+columnas_discretas <- todas_columnas[-columnas_dummies]
+```
+
+```{r}
+# Iterar sobre las columnas discretas y reemplazar los valores "99" por NA
+for (columna in columnas_discretas) {
+  datos[[columna]][datos[[columna]] == "99"] <- NA
+}
+
+```
+
+
+
+## Limpieza última de valores 
+
+```{r}
+# Ver las dimensiones del conjunto de datos
+num_filas <- nrow(datos)
+num_columnas <- ncol(datos)
+
+# Calcular el porcentaje de valores vacíos en cada columna y fila
+porcentaje_nulos_columnas <- colMeans(is.na(datos))
+porcentaje_nulos_filas <- rowMeans(is.na(datos))
+
+# Identificar las columnas con más del 50% de valores vacíos
+columnas_con_valores_vacios <- names(porcentaje_nulos_columnas[porcentaje_nulos_columnas > 0.2])
+filas_con_valores_vacios <- which(porcentaje_nulos_filas > 0.2)
+
+# Mostrar resultados
+cat("Número total de filas:", num_filas, "\n")
+cat("Número total de columnas:", num_columnas, "\n")
+cat("Columnas con más del 20% de valores vacíos:", columnas_con_valores_vacios, "\n")
+cat("Número de filas con más del 20% de valores vacíos:", length(filas_con_valores_vacios), "\n")
+
+
+# Eliminar las filas identificadas
+datos <- datos[-filas_con_valores_vacios, ]
+
+```
+
+
+
+## Imputación de valores faltantes (uni-respuesta no especiales y discretas)
+
+Se imputan con la moda las categóricas y con la mediana las discretas.
+
+```{r}
+# Identificar columnas con datos faltantes
+columnas_faltantes <- colnames(datos)[colSums(is.na(datos)) > 0]
+
+# Variables discretas con nulos
+columnas_discretas_nulos <- intersect(columnas_faltantes, columnas_discretas)
+
+# Variables categóricas con nulos
+columnas_categoricas_nulos <- setdiff(columnas_faltantes, columnas_discretas_nulos)
+```
+
+
+```{r}
+# Definir función para calcular la moda
+Mode <- function(x) {
+  unique_x <- unique(x)
+  unique_x[which.max(tabulate(match(x, unique_x)))]
+}
+
+
+# Imputar valores faltantes con la moda para variables categóricas
+for (col in columnas_categoricas_nulos) {
+  moda <- Mode(datos[[col]])
+  datos[[col]][is.na(datos[[col]])] <- moda
+}
+
+# Imputar valores faltantes con la mediana para variables discretas
+for (col in columnas_discretas_nulos) {
+  mediana <- median(datos[[col]], na.rm = TRUE)
+  datos[[col]][is.na(datos[[col]])] <- mediana
+}
+
+```
+
+
+
+
+
+## PCA
+
+```{r}
+# Cargar bibliotecas necesarias
+library(FactoMineR)
+library(factoextra)
+library(gridExtra) # Necesaria para grid.arrange
+
+# Seleccionar las columnas de interés para el PCA
+datos_pca <- datos[, -c(222:231)]  # Excluir las columnas P60R1 a P60R10
+
+# Realizar PCA en los datos
+pca_result <- PCA(datos_pca, graph = FALSE)  # No mostrar gráficos por ahora, solo resultados
+
+
+# Graficar PCA con puntos coloreados por P60R11 y visualizando diferentes combinaciones de dimensiones
+
+pca_plot_1_2 <- fviz_pca_ind(pca_result, label="none",habillage=as.factor(datos$P60R11), axes = c(1, 2)) + scale_shape_manual(values=c(16, 16), labels = c("Enfermo", "Sano"))+ scale_color_manual(values=c("#92c5de","#FFCC99"), labels = c("Enfermo", "Sano")) +
+  theme(legend.text = element_text(size = 10), legend.title = element_text(size = 12))
+
+
+pca_plot_1_3 <- fviz_pca_ind(pca_result, label="none",habillage=as.factor(datos$P60R11), axes = c(1, 3)) + scale_shape_manual(values=c(16, 16), labels = c("Enfermo", "Sano"))+ scale_color_manual(values=c("#92c5de","#FFCC99"), labels = c("Enfermo", "Sano")) +
+  theme(legend.text = element_text(size = 10), legend.title = element_text(size = 12))
+
+pca_plot_1_4 <- fviz_pca_ind(pca_result, label="none",habillage=as.factor(datos$P60R11), axes = c(1, 4)) + scale_shape_manual(values=c(16, 16), labels = c("Enfermo", "Sano"))+ scale_color_manual(values=c("#92c5de","#FFCC99"), labels = c("Enfermo", "Sano")) +
+  theme(legend.text = element_text(size = 10), legend.title = element_text(size = 12))
+
+pca_plot_2_3 <- fviz_pca_ind(pca_result, label="none",habillage=as.factor(datos$P60R11), axes = c(2, 3)) + scale_shape_manual(values=c(16, 16), labels = c("Enfermo", "Sano"))+ scale_color_manual(values=c("#92c5de","#FFCC99"), labels = c("Enfermo", "Sano")) +
+  theme(legend.text = element_text(size = 10), legend.title = element_text(size = 12))
+
+# Organizar los gráficos en una sola figura
+combined_plot <- grid.arrange(pca_plot_1_2, pca_plot_1_3, pca_plot_1_4, pca_plot_2_3, nrow = 2)
+
+# Mostrar el gráfico combinado
+print(combined_plot)
+
+```
+
+
+
+
+
+```{r}
+# Calcular las cargas
+loadings <- pca_result$var$coord
+
+
+# Definir una función para obtener las variables más importantes para cada dimensión
+get_top_variables <- function(loadings, n_top = 10) {
+  top_vars <- list()  # Lista para almacenar las variables más importantes para cada dimensión
+  
+  # Iterar sobre las columnas de la matriz de loadings
+  for (i in 1:ncol(loadings)) {
+    # Obtener las cargas para la dimensión actual
+    loading <- loadings[, i]
+    
+    # Ordenar las cargas por valor absoluto y obtener los índices de las más grandes
+    top_indices <- order(abs(loading), decreasing = TRUE)[1:n_top]
+    
+    # Obtener los nombres de las variables correspondientes a los índices
+    top_vars[[i]] <- rownames(loadings)[top_indices]
+  }
+  
+  return(top_vars)
+}
+
+# Obtener las 10 variables más importantes para cada dimensión
+top_variables <- get_top_variables(loadings)
+
+# Mostrar las variables más importantes para cada dimensión
+for (i in 1:length(top_variables)) {
+  cat("Dimension", i, ":", paste(top_variables[[i]], collapse = ", "), "\n")
+}
+
+```
+# Mini EDA
+
+```{r}
+library(ggplot2)
+library(gridExtra)
+
+# Contar la cantidad de hombres y mujeres
+sexo <- data.frame(
+  Genero = c("Mujeres", "Hombres", "Otro"),
+  Cantidad = c(sum(datos$P2R1), sum(datos$P2R2), sum(datos$P2R3))
+)
+
+blank_theme <- theme_minimal()+
+  theme(
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  panel.border = element_blank(),
+  panel.grid=element_blank(),
+  axis.ticks = element_blank(),
+  plot.title=element_text(size=14, face="bold")
+  )
+
+legend_title <- "Género"
+
+grafico_sexo <- ggplot(sexo, aes(x="", y=Cantidad, fill=Genero)) +
+  geom_bar(stat="identity", width=1, color="white") +  
+  blank_theme +
+  theme(axis.text.x=element_blank()) +
+  coord_polar("y", start=0) +
+  scale_fill_manual(legend_title,values=c("#92c5de", "#FFCC99","#FF9999")) +
+  geom_text(aes(y = Cantidad/2 + c(0, cumsum(Cantidad)[-length(Cantidad)]),
+                      label = Cantidad), size=5)
+
+
+
+
+# Contar la cantidad de personas por tipo de trastorno
+trastornos <- data.frame(
+  Tipo_Trastorno = c("Depresion", "Ansiedad", "TOC", "Estres_Post", "Adic_Sustancias", "Adic_Sin_Sustancias", "Alimentacion", "TDAH", "Personalidad", "Otros_Trastornos", "Ninguno"),
+  Cantidad = c(sum(datos$P60R1), sum(datos$P60R2), sum(datos$P60R3), sum(datos$P60R4), sum(datos$P60R5), sum(datos$P60R6), sum(datos$P60R7), sum(datos$P60R8), sum(datos$P60R9), sum(datos$P60R10), sum(datos$P60R11))
+)
+
+# Definir el orden deseado de los trastornos
+orden_trastornos <- c("Depresion", "Ansiedad", "TOC", "Estres_Post", "Adic_Sustancias", "Adic_Sin_Sustancias", "Alimentacion", "TDAH", "Personalidad", "Otros_Trastornos", "Ninguno")
+
+# Convertir la variable Tipo_Trastorno a factor con el orden deseado
+trastornos$Tipo_Trastorno <- factor(trastornos$Tipo_Trastorno, levels = orden_trastornos)
+
+# Crear gráfico de barras para la cantidad de personas por tipo de trastorno
+grafico_trastornos <- ggplot(trastornos, aes(x = Tipo_Trastorno, y = Cantidad, fill = Tipo_Trastorno)) +
+  geom_bar(stat = "identity", fill = c("#FF9999", "#92c5de", "#CCCCFF", "#FFCC99", "#99CC99", "#FF99CC", "#9999FF", "#CC9999", "#CCFF66", "#666699", "#999999")) +
+  geom_hline(yintercept = seq(100, 600, by = 100), color = "gray", linetype = "dotted", alpha = 0.3, linewidth = 0.5) +
+  scale_y_continuous(breaks = seq(0, 600, by = 100)) +
+  theme(
+    axis.text.x = element_text(size = 12, angle = 90, hjust = 0.5), 
+    axis.title.x = element_text(size = 14), 
+    legend.text = element_text(size = 10), 
+    legend.title = element_text(size = 12),
+    panel.background = element_rect(fill = "white", color = "black", linewidth = 0.5)
+  ) +
+  labs(title = "Personas por Tipo de Trastorno", x = "Tipo de Trastorno", y = NULL)
+
+
+# Crear histograma para la edad de los entrevistados
+grafico_edad <- ggplot(datos, aes(x = P1)) +
+  geom_histogram(binwidth = 2, fill = "#92c5de",color = "black") +
+  labs(title = "Distribución de Edad", x = "Edad", y = "Frecuencia") +
+  theme(axis.text.x = element_text(size = 12, hjust = 0.5), 
+    axis.title.x = element_text(size = 14),legend.text = element_text(size = 10), legend.title = element_text(size = 12), panel.background = element_rect(fill = "white", color = "black", size = 0.5))
+
+# Contar cuántas personas han tenido problemas de salud mental en los últimos meses
+problemas_salud_mental <- data.frame(
+  Estado = c("Nunca", "Una sola vez", "De vez en cuando", "Con frecuencia", "Continuamente"), 
+  Cantidad = c(sum(datos$P56R1),sum(datos$P56R2),sum(datos$P56R3),sum(datos$P56R4),sum(datos$P56R5))
+)
+
+# Definir el orden deseado de las categorías
+orden_estados <- c("Nunca", "Una sola vez", "De vez en cuando", "Con frecuencia", "Continuamente")
+
+# Convertir la variable Estado a factor con el orden deseado
+problemas_salud_mental$Estado <- factor(problemas_salud_mental$Estado, levels = orden_estados)
+
+# Crear gráfico de barras para la cantidad de personas con problemas de salud mental con el orden deseado
+grafico_problemas <- ggplot(problemas_salud_mental, aes(x = Estado, y = Cantidad, fill = Estado)) +
+  geom_bar(stat = "identity", fill = c("#FF9999", "#92c5de", "#CCCCFF", "#FFCC99", "#99CC99")) +
+  labs(title = "Frecuencia de padecer problemas de Salud Mental", x = NULL, y = NULL) +
+  theme(axis.text.x = element_text(size = 12, angle = 0, hjust = 0.5), 
+    axis.title.x = element_text(size = 14),legend.text = element_text(size = 10), legend.title = element_text(size = 12),panel.background = element_rect(fill = "white", color = "black", size = 0.5))
+
+# Mostrar los gráficos individualmente con leyendas más grandes
+print(grafico_sexo)
+print(grafico_trastornos)
+print(grafico_edad)
+print(grafico_problemas)
+```
+
+
+
+
+```{r}
+# Carga las bibliotecas necesarias
+library(ggplot2)
+library(maps)
+library(dplyr)
+library(mapSpain)
+library(sf)
+
+# Selecciona las columnas de las comunidades autónomas
+comunidades <- datos[, 1:18]
+
+# Obtén el nombre de la comunidad autónoma
+nombre_comunidad <- gsub("P0R", "", colnames(comunidades))
+
+# Agrega una columna para identificar la comunidad autónoma
+comunidades$COMUNIDAD_AUTONOMA <- nombre_comunidad[apply(comunidades, 1, which.max)]
+
+# Selecciona la columna de personas enfermas
+enfermos <- datos[, 232]
+
+# Calcula el ratio de personas enfermas frente a sanas para cada comunidad autónoma
+ratios <- cbind(comunidades, enfermos) %>%
+  group_by(COMUNIDAD_AUTONOMA) %>%
+  summarise(ratio_enfermos_sanos = sum(enfermos == 0) / sum(enfermos == 1), .groups = "drop")
+
+# Reordena los ratios para que coincidan con el orden de las CCAA en el mapa
+ratio_nuevo <- c(ratios$ratio_enfermos_sanos[1:3], ratios$ratio_enfermos_sanos[15], ratios$ratio_enfermos_sanos[8], ratios$ratio_enfermos_sanos[9:10], ratios$ratio_enfermos_sanos[4], ratios$ratio_enfermos_sanos[11], ratios$ratio_enfermos_sanos[6], ratios$ratio_enfermos_sanos[13:14], ratios$ratio_enfermos_sanos[5], ratios$ratio_enfermos_sanos[18], ratios$ratio_enfermos_sanos[7], ratios$ratio_enfermos_sanos[17], ratios$ratio_enfermos_sanos[16], 0, 0)
+
+# Obtén las regiones de España
+regions <- esp_get_ccaa(moveCAN = TRUE)
+
+# Asegúrate de que la longitud de 'ratio_nuevo' coincida con el número de regiones
+if(length(ratio_nuevo) != nrow(regions)) {
+  stop("La longitud de 'ratio_nuevo' no coincide con el número de regiones en 'regions'")
+}
+
+# Agrega 'ratio_nuevo' a 'regions'
+regions$ratio_nuevo <- ratio_nuevo
+
+# Visualiza el mapa
+ggplot(regions) +
+  geom_sf(aes(fill = ratio_nuevo), color = "grey70", linewidth = .3) +
+  scale_fill_gradientn(colors = hcl.colors(10, "Blues", rev = TRUE), n.breaks = 10, guide = guide_legend(title = "Ratio enfermo - sano"))
+```
+
+
+
+
+
+
+
+
+
+
+# DATOS FINALES
+
+```{r}
+# Escribir el conjunto de datos finales a un archivo CSV
+write.csv(datos, "datos_finales.csv", row.names = FALSE)
+```
+
+
+
+
+
+
+
+from sklearn import datasets
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+
+# Load example dataset (e.g., iris dataset)
+iris = datasets.load_iris()
+X = iris.data
+y = iris.target
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+
+# Standardize features
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)# Display predicted classes and associated probabilities for the first few samples
+for i in range(5):  # Display probabilities for the first 5 samples
+    print(f"Sample {i+1}: Predicted Class = {y_pred[i]}, Probabilities = {y_probabilities[i]}")
+X_test = scaler.transform(X_test)
+
+# Train SVM classifier with probability estimates enabled (Platt scaling)
+svm_classifier = SVC(kernel='rbf', probability=True, random_state=42)
+svm_classifier.fit(X_train, y_train)
+
+# Make predictions and obtain probability estimates
+y_pred = svm_classifier.predict(X_test)
+y_probabilities = svm_classifier.predict_proba(X_test)
+
+
+
+
+
+
+
+
+
+
+
+
+Primero eliminar variables (columnas) del final.
+
+Las preguntas que no aplican a toda la muestra, eliminar salvo SALUD MENTAL (poner 0 en los NAs).
+
+Eliminar las instancias de los 99.
+
+Poner bien 0 y 1 de las variables que aparecen "mal" codificadas.
+
+PCA y ciertas características de la muestra.
+
+
+Hiperp: para C y gamma (desde 2^-5...2^5).
+
+
+RF: 
+
+num arboles
+
+num variables en c partición
+
+
+
